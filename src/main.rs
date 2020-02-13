@@ -1,67 +1,33 @@
-use futures::{Async, future, try_ready, Future, Poll};
+use futures::{future, stream::futures_unordered::FuturesUnordered};
+use pin_project::pin_project;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::sync::lock;
+use tokio::{
+    stream::StreamExt,
+    sync::{Mutex, MutexGuard},
+};
 
-fn main() {
-    tokio::run(future::lazy(|| {
-        let lock = lock::Lock::new(());
-
-        for _ in 0..10_000 {
-            let fut = Loop {
-                lock: lock.clone(),
-                pending: None,
-            };
-            tokio::spawn(fut);
-        }
-
-        future::empty()
-    }));
-}
-
-struct Loop {
-    lock: lock::Lock<()>,
-    pending: Option<tokio::timer::Timeout<AcquireAndIdle>>,
-}
-
-struct AcquireAndIdle {
-    lock: lock::Lock<()>,
-    locked: Option<lock::LockGuard<()>>,
-}
-
-impl Future for AcquireAndIdle {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        loop {
-            if self.locked.is_some() {
-                return Ok(Async::NotReady);
-            }
-
-            let guard = try_ready!(Ok(self.lock.poll_lock()));
-            self.locked = Some(guard);
-        }
-    }
-}
-
-impl Future for Loop {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<(), ()> {
-        loop {
-            if let Some(pending) = self.pending.as_mut() {
-                if let Ok(Async::NotReady) = pending.poll() {
-                    return Ok(Async::NotReady);
+#[tokio::main]
+async fn main() {
+    let lock = Arc::new(Mutex::new(()));
+    let mut funordered = (0..10_000)
+        .map(|_| {
+            let lock = lock.clone();
+            tokio::spawn(async move {
+                let lock = lock.clone();
+                loop {
+                    let lock2 = lock.clone();
+                    tokio::time::timeout(Duration::from_millis(1000), async move {
+                        lock2.lock().await;
+                        future::pending::<()>().await;
+                    })
+                    .await;
                 }
-                self.pending = None;
-            }
-
-            let fut = AcquireAndIdle {
-                lock: self.lock.clone(),
-                locked: None,
-            };
-            self.pending = Some(tokio::timer::Timeout::new(fut, Duration::from_millis(1000)));
-        }
-    }
+            })
+        })
+        .collect::<FuturesUnordered<_>>();
+    while let Some(_) = funordered.next().await {}
 }
