@@ -14,20 +14,25 @@ use tokio::{
 async fn main() {
     let lock = Arc::new(Mutex::new(()));
     let mut funordered = (0..10_000)
-        .map(|_| {
+        .map(|i| {
             let lock = lock.clone();
-            tokio::spawn(async move {
+            let f = tokio::spawn(async move {
                 let lock = lock.clone();
                 for _ in 0..109 {
                     let lock2 = lock.clone();
-                    tokio::time::timeout(Duration::from_millis(1000), async move {
-                        lock2.lock().await;
+                    tokio::time::timeout(Duration::from_millis(100), async move {
+                        let guard = lock2.lock().await;
                         future::pending::<()>().await;
+                        drop(guard);
                     })
                     .await;
                 }
-            })
+            });
+            // println!("spawned {}", i);
+            f
         })
         .collect::<FuturesUnordered<_>>();
-    while let Some(_) = funordered.next().await {}
+    while let Some(_) = funordered.next().await {
+        // println!("future finished")
+    }
 }
