@@ -18,7 +18,7 @@ async fn main() {
             let lock = lock.clone();
             tokio::spawn(async move {
                 let lock = lock.clone();
-                loop {
+                for _ in 0..109 {
                     let lock2 = lock.clone();
                     tokio::time::timeout(Duration::from_millis(1000), async move {
                         lock2.lock().await;
